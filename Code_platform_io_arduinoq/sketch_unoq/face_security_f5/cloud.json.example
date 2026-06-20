@@ -1,0 +1,8 @@
+{
+  "_comentario": "Copiar este archivo como cloud.json (en la RAIZ de la app, junto a app.yaml) y rellenar. cloud.json NO se versiona (.gitignore). SERVER_HOST con esquema explicito (http:// para LAN dev, https:// en produccion). API_KEY vacio = modo dev (no se manda el header X-API-Key).",
+  "SERVER_HOST": "http://192.168.100.23:8000",
+  "API_KEY": "",
+  "POLL_S": 3,
+  "RESULT_POLL_S": 0.8,
+  "HB_S": 15
+}

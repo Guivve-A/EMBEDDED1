@@ -1,0 +1,22 @@
+# app.yaml  -  EMBEBIDOS_1 / Fase 4  -  App Lab del UNO Q
+# Ing 2 (firmware embedded)
+#
+# Define la app que aparece en la GUI de Arduino App Lab. Usa el brick web_ui
+# (portal de configuracion WiFi, lado Linux) y publica su puerto 7000.
+# El sketch del MCU (sketch/) corre en paralelo y coordina LEDs/boton de reset.
+
+name: FaceSecurity F4 (WiFi setup)
+icon: 🔒
+description: >
+  Fase 4 - Portal WiFi del UNO Q. Levanta un Access Point de configuracion
+  (FaceSecurity_Setup) y sirve un portal en :7000 para guardar 2 redes WiFi.
+  Tras guardar, conmuta a modo cliente. El WiFi/AP se gestiona en el lado Linux
+  (NetworkManager); el MCU coordina LEDs de estado y el boton de reset.
+
+# Puerto del portal web (brick web_ui). En modo AP: http://10.42.0.1:7000
+ports:
+  - 7000
+
+# Bricks del lado Linux usados por la app.
+bricks:
+  - arduino:web_ui: {}

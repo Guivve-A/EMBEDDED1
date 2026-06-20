@@ -1,0 +1,8 @@
+# Secretos locales del bridge cloud (usar cloud.json.example como plantilla).
+cloud.json
+
+# Archivos de runtime que la app/los watchers generan en el dispositivo.
+wifi_request.json
+wifi_status.json
+mcu_request.json
+mcu_event.json

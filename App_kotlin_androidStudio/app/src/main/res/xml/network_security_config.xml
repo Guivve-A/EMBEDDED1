@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    POST-PIVOTE (Día 2): la app ya NO habla con el AP del ESP32-CAM (192.168.4.x).
+    Ahora consume el servidor FastAPI que corre en la PC, dentro de la red WiFi del hogar.
+    La IP del servidor es CONFIGURABLE por el usuario desde Settings (default 192.168.1.50:8000),
+    por lo que no podemos enumerar un host fijo.
+
+    Android Network Security Config NO soporta rangos CIDR (solo hosts exactos), así que para
+    permitir HTTP plano contra cualquier IP privada de la LAN del hogar habilitamos cleartext
+    en la base-config. Es aceptable porque:
+      - Es un proyecto académico en red local (no expuesto a Internet).
+      - El servidor FastAPI sirve HTTP plano (sin TLS) en :8000.
+    Se mantienen las trust-anchors del sistema para que cualquier llamada HTTPS siga validando
+    certificados con normalidad.
+
+    Se listan además los gateways domésticos típicos y el host del emulador como documentación
+    de las subredes objetivo (192.168.0.x / 192.168.1.x / 10.0.2.2).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Subredes domésticas objetivo (documentación + hosts comunes). -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Default del servidor PC (ver SettingsDataStore.DEFAULT_HOST = 192.168.100.21:8000). -->
+        <domain includeSubdomains="true">192.168.100.21</domain>
+        <!-- Gateway típico de la subred del servidor (192.168.100.x). -->
+        <domain includeSubdomains="true">192.168.100.1</domain>
+        <!-- Subredes domésticas alternativas. -->
+        <domain includeSubdomains="true">192.168.1.50</domain>
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">192.168.0.1</domain>
+        <!-- Host de la máquina anfitriona desde el emulador de Android. -->
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <!-- Loopback para pruebas con adb reverse. -->
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+</network-security-config>

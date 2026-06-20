@@ -1,0 +1,11 @@
+# requirements_gui.txt — dependencias del Panel de Control (CustomTkinter).
+# Instalar en el venv del servidor o en un venv propio Panel_control_python\.venv:
+#   <python> -m pip install -r Panel_control_python\requirements_gui.txt
+#
+# Tkinter (base de CustomTkinter) viene con la instalación estándar de Python en
+# Windows; no se instala por pip.
+
+customtkinter>=5.2.0      # GUI moderna oscura (botones, paneles, progressbar)
+requests>=2.31.0          # health-check del servidor + API de Telegram
+pyserial>=3.5             # detección del ESP32-CAM por puerto COM (CP210x/CH340)
+qrcode[pil]>=7.4          # QR con la URL del servidor para la app Android

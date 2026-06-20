@@ -1,0 +1,37 @@
+# ===========================================================================
+# .gitignore — Servidor FastAPI EMBEBIDOS_1
+# ===========================================================================
+
+# --- Secretos y configuración local ---
+.env
+secrets/
+
+# --- Datos generados en runtime (no versionar) ---
+storage/photos/
+storage/*.db
+storage/*.db-journal
+storage/*.db-wal
+storage/*.db-shm
+storage/*.pkl
+storage/*.json
+storage/state.json
+storage/fcm_tokens.json
+*.pkl
+*.db
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Entornos virtuales ---
+.venv/
+venv/
+env/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black_absolute">#FF000000</color>
+    <color name="black_elevated">#FF0E0E10</color>
+    <color name="surface_card">#FF141416</color>
+    <color name="border_subtle">#FF1F1F22</color>
+    <color name="gold_primary">#FFD4AF37</color>
+    <color name="gold_secondary">#FFC9A961</color>
+    <color name="text_primary">#FFF5F5F7</color>
+    <color name="text_secondary">#FFA1A1A6</color>
+</resources>

@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# requirements.txt — Servidor FastAPI EMBEBIDOS_1
+# Fase 6: solo lo necesario para levantar la API + almacenamiento.
+# ---------------------------------------------------------------------------
+
+# --- Núcleo Fase 6 ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20      # uploads multipart (POST /verify, /enroll)
+python-dotenv==1.0.1          # carga de .env (config.py)
+aiosqlite==0.20.0             # índice de eventos en SQLite (async)
+pillow==11.1.0                # manipulación de imágenes (validación/thumbnails)
+
+# --- Fase 7 (DeepFace + ArcFace) — ACTIVAS (versiones reales del entorno probado) ---
+deepface==0.0.100             # reconocimiento facial (descarga ArcFace ~130 MB en 1ª corrida)
+tensorflow==2.21.0            # backend de DeepFace (CPU en este proyecto)
+tf-keras==2.21.0             # IMPRESCINDIBLE: provee Keras 2; con keras 3 hay que
+                             #   exportar TF_USE_LEGACY_KERAS=1 (ver README F7).
+opencv-python==4.11.0.86     # detección de cara (backend opencv) + lectura de imágenes
+numpy==1.26.4                # operaciones sobre embeddings (coseno, L2). <2.0 por
+                             #   compatibilidad con TF 2.21 / deepface.
+# Nota: `keras==3.14.1` entra como dependencia transitiva de tensorflow 2.21; no se
+# usa directamente (forzamos tf-keras vía TF_USE_LEGACY_KERAS=1).
+
+# --- Fase 8 (Telegram) — ACTIVA ---
+httpx==0.28.1                # cliente async para la Bot API de Telegram
+
+# --- Fase 9 (FCM / Firebase) — ACTIVA ---
+firebase-admin==7.4.0         # envío de push notifications vía FCM (serviceAccountKey)
+# Convivencia con F7: firebase-admin 7.4.0 NO altera protobuf (7.35.0) ni grpcio
+# (1.81.0) ya presentes por tensorflow 2.21; `pip check` sin conflictos e
+# `import deepface` + `import firebase_admin` conviven en el mismo venv.

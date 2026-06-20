@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rutas que el FileProvider expone (capturas temporales de cámara para Enroll). -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+    <cache-path name="cache_root" path="." />
+</paths>

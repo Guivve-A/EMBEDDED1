@@ -1,0 +1,75 @@
+// ============================================================================
+// EMBEBIDOS_1 - ESP32-CAM  ·  config.h.example  (Ing 2 / Parte 2)
+// ----------------------------------------------------------------------------
+// INSTRUCCIONES:
+//   1. Copia este archivo como `src/config.h`.
+//   2. Rellena SERVER_HOST con el dominio real del servidor (DuckDNS) y
+//      API_KEY con la clave generada en el deploy de Oracle Cloud.
+//   3. `src/config.h` está en .gitignore: NUNCA se commitea con secretos.
+// ============================================================================
+#pragma once
+
+#include "esp_camera.h"  // para el tipo framesize_t
+
+// ----- Modo de transporte: LOCAL (demo) vs NUBE ----------------------------
+// USE_TLS  0 = LOCAL: HTTP plano contra la PC (FastAPI dev en :8000, sin API key).
+//          1 = NUBE : HTTPS contra el dominio publico (:443, con API key).
+// Ver README "Modo demo local vs nube".
+#define USE_TLS       0
+
+// ----- Servidor -------------------------------------------------------------
+// NOTA (v2 polling): el host y el puerto EFECTIVOS se leen de NVS si el portal
+// AP los guardo (claves "srv_host"/"srv_port", namespace "facecam"). Los
+// SERVER_HOST/SERVER_PORT de abajo son solo el FALLBACK cuando NVS esta vacio.
+// Asi la IP del servidor se cambia desde el portal sin re-flashear.
+#if USE_TLS
+  // NUBE (Oracle Cloud, Nginx + HTTPS)
+  #define SERVER_HOST   "embebidos.duckdns.org"   // <-- dominio real aqui (fallback)
+  #define SERVER_PORT   443
+  #define API_KEY       "PON_TU_API_KEY"          // <-- API key real aqui
+#else
+  // LOCAL (PC con FastAPI dev). OJO: la IP es DHCP, puede cambiar -> editarla
+  // desde el portal AP (sin re-flashear) o fijar IP estatica en la PC.
+  #define SERVER_HOST   "192.168.100.23"          // <-- IP local de la PC (fallback)
+  #define SERVER_PORT   8000
+  #define API_KEY       ""                         // vacio: el server dev no la exige
+#endif
+#define DEVICE_ID     "esp32cam"
+
+// TLS: 0 = validar certificado con ISRG Root X1 embebida (recomendado).
+//      1 = setInsecure(): sin validacion de cert (solo para depurar problemas
+//          de TLS; el canal sigue cifrado pero es vulnerable a MITM).
+#define TLS_INSECURE  0
+
+// NTP: la validacion del certificado TLS exige hora real (el ESP32 arranca
+// en 1970 y el cert pareceria "aun no valido"). Se sincroniza tras conectar.
+#define NTP_SERVER_1  "pool.ntp.org"
+#define NTP_SERVER_2  "time.google.com"
+#define NTP_SYNC_TIMEOUT_MS  10000
+
+// ----- Portal AP de configuracion WiFi (solo sin credenciales en NVS) ------
+#define AP_SSID       "FaceCam_Setup"
+#define AP_PASS       "facecam1234"
+
+// ----- Pines -----------------------------------------------------------------
+// v2 SIN CABLES: el disparo ya NO entra por GPIO (se hace polling al server,
+// GET /capture-request) y el resultado ya NO sale por GPIO (el UNO Q lo recibe
+// del propio server). Los #define de TRIGGER/RESULT quedan como historico y NO
+// se usan en el firmware; solo se mantiene PIN_FLASH_LED (flash en la captura).
+#define PIN_TRIGGER_IN        13   // [LEGACY v1, sin uso] entrada de disparo
+#define PIN_RESULT_MATCH      14   // [LEGACY v1, sin uso] salida resultado match
+#define PIN_RESULT_INTRUDER   15   // [LEGACY v1, sin uso] salida resultado intruso
+#define PIN_FLASH_LED          4   // LED flash de la placa AI-Thinker (EN USO)
+
+// ----- Tiempos ---------------------------------------------------------------
+#define HEARTBEAT_S              15     // periodo del heartbeat al servidor
+#define POLL_MS                  1500   // periodo del polling GET /capture-request
+#define HTTP_TIMEOUT_MS          10000  // timeout de POST /verify
+#define POLL_TIMEOUT_MS          3000   // timeout (corto) del GET /capture-request
+#define HEARTBEAT_TIMEOUT_MS     5000   // timeout (mas corto) del heartbeat
+#define WIFI_TIMEOUT_MS          8000   // timeout por red al conectar STA
+#define WIFI_RETRY_CYCLES        3      // ciclos red1+red2 antes de reabrir AP
+
+// ----- Camara ----------------------------------------------------------------
+#define CAM_FRAMESIZE  FRAMESIZE_SVGA   // 800x600 con PSRAM (fallback QVGA)
+#define CAM_JPEG_QUALITY  12            // 0-63: menor = mejor calidad

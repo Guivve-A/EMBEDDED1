@@ -1,0 +1,10 @@
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+*.bin
+*.elf
+*.map
+
+# Configuracion con secretos (crear desde src/config.h.example)
+src/config.h

@@ -1,0 +1,23 @@
+# app.yaml  -  EMBEBIDOS_1 / Fase 5 (v2)  -  App Lab del UNO Q
+# Ing 2 (firmware embedded)
+#
+# Version DEFINITIVA del UNO Q: sensor LDR + maquina de estados de seguridad
+# (MCU) + portal WiFi F4 + bridge al servidor cloud (lado Linux).
+# El sketch del MCU dispara la ESP32-CAM por GPIO y recibe el resultado.
+
+name: FaceSecurity F5 (definitiva)
+icon: 🛡️
+description: >
+  Fase 5 v2 - Sistema completo del UNO Q. MCU: LDR autocalibrada (A0) +
+  laser (D7) + buzzer (D8) + LEDs (D5/D6) + trigger a ESP32-CAM (D4) +
+  resultados (D9/D10) con timeout fail-safe. Linux: portal WiFi de F4 en :7000
+  + bridge cloud (poll GET /state -> ARM/DISARM al MCU + heartbeat 15 s).
+  Configurar cloud.json (ver cloud.json.example) antes de usar el bridge.
+
+# Puerto del portal web (brick web_ui). En modo AP: http://10.42.0.1:7000
+ports:
+  - 7000
+
+# Bricks del lado Linux usados por la app.
+bricks:
+  - arduino:web_ui: {}
