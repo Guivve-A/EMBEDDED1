@@ -18,13 +18,15 @@ import java.io.File
 
 data class EnrollUiState(
     val name: String = "",
-    val photoUri: Uri? = null,
+    val photos: List<Uri> = emptyList(),
     val submitting: Boolean = false,
     val success: Boolean = false,
     val successPerson: String? = null,
+    val successSamples: Int = 0,
     val errorMessage: String? = null,
 ) {
-    val canSubmit: Boolean get() = name.isNotBlank() && photoUri != null && !submitting
+    /** Se puede registrar con al menos 1 muestra; se recomiendan TARGET_SAMPLES. */
+    val canSubmit: Boolean get() = name.isNotBlank() && photos.isNotEmpty() && !submitting
 }
 
 class EnrollViewModel(app: Application) : AndroidViewModel(app) {
@@ -33,8 +35,27 @@ class EnrollViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(EnrollUiState())
     val ui: StateFlow<EnrollUiState> = _ui.asStateFlow()
 
+    companion object {
+        /** Nº de tomas recomendado para que el sistema aprenda bien el rostro. */
+        const val TARGET_SAMPLES = 5
+    }
+
     fun setName(value: String) = _ui.update { it.copy(name = value, errorMessage = null) }
-    fun setPhoto(uri: Uri?) = _ui.update { it.copy(photoUri = uri, errorMessage = null) }
+
+    /** Añade una toma a la lista (hasta TARGET_SAMPLES). */
+    fun addPhoto(uri: Uri?) {
+        if (uri == null) return
+        _ui.update {
+            if (it.photos.size >= TARGET_SAMPLES) it.copy(errorMessage = null)
+            else it.copy(photos = it.photos + uri, errorMessage = null)
+        }
+    }
+
+    /** Elimina la toma en la posición dada. */
+    fun removePhoto(index: Int) = _ui.update {
+        if (index in it.photos.indices) it.copy(photos = it.photos - it.photos[index])
+        else it
+    }
 
     /** Muestra un mensaje de error en la UI (p.ej. permiso de cámara denegado). */
     fun setError(message: String) = _ui.update { it.copy(errorMessage = message) }
@@ -47,30 +68,36 @@ class EnrollViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(errorMessage = "El nombre no puede estar vacío.") }
             return
         }
-        val uri = state.photoUri ?: run {
-            _ui.update { it.copy(errorMessage = "Selecciona o toma una foto.") }
+        if (state.photos.isEmpty()) {
+            _ui.update { it.copy(errorMessage = "Toma al menos una foto (se recomiendan $TARGET_SAMPLES).") }
             return
         }
         _ui.update { it.copy(submitting = true, errorMessage = null) }
         viewModelScope.launch {
-            val file = copyUriToTempFile(uri)
-            if (file == null) {
-                _ui.update { it.copy(submitting = false, errorMessage = "No se pudo leer la foto.") }
+            val files = state.photos.mapNotNull { copyUriToTempFile(it) }
+            if (files.isEmpty()) {
+                _ui.update { it.copy(submitting = false, errorMessage = "No se pudieron leer las fotos.") }
                 return@launch
             }
-            when (val res = repo.enroll(state.name.trim(), file)) {
+            // replace=true: re-aprende el rostro desde cero con estas muestras (atómico).
+            when (val res = repo.enroll(state.name.trim(), files, replace = true)) {
                 is ApiResult.Success ->
                     if (res.data.enrolled) {
                         _ui.update {
-                            it.copy(submitting = false, success = true, successPerson = res.data.person)
+                            it.copy(
+                                submitting = false,
+                                success = true,
+                                successPerson = res.data.person,
+                                successSamples = res.data.n_valid,
+                            )
                         }
                     } else {
-                        // El servidor recibió la foto pero NO detectó un rostro.
+                        // El servidor recibió las fotos pero NO detectó rostro en ninguna.
                         _ui.update {
                             it.copy(
                                 submitting = false,
-                                errorMessage = "No se detectó un rostro en la foto. " +
-                                    "Usa una imagen nítida, de frente y bien iluminada.",
+                                errorMessage = "No se detectó un rostro en las fotos. " +
+                                    "Usa imágenes nítidas, de frente y bien iluminadas.",
                             )
                         }
                     }
@@ -78,7 +105,7 @@ class EnrollViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(submitting = false, errorMessage = res.message)
                 }
             }
-            file.delete()
+            files.forEach { it.delete() }
         }
     }
 

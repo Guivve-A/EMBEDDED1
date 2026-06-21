@@ -491,9 +491,13 @@ class PanelControlApp(ctk.CTk):
         self.btn_esp_reset.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.btn_esp_reset.configure(state="disabled")
 
+        self.btn_esp_intrusion = self._gold_button(
+            b, "Validar Intruso", self._on_esp_trigger_intrusion)
+        self.btn_esp_intrusion.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
         self.pb_esp = ctk.CTkProgressBar(b, progress_color=COL_GOLD, mode="determinate")
         self.pb_esp.set(0)
-        self.pb_esp.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.pb_esp.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     # ---- Panel 6: Arduino UNO Q ------------------------------------------ #
     def _build_unoq_panel(self) -> None:
@@ -789,23 +793,33 @@ class PanelControlApp(ctk.CTk):
             self._wifi_stop.wait(4.0)
 
     def _apply_wifi(self, info: dict, announce: bool = False) -> None:
-        """Pinta SSID/banda/IP, el semáforo de banda y el banner de incoherencia."""
+        """
+        Pinta SIEMPRE la red actual con sus parámetros (SSID, banda, señal, IP).
+
+        Nunca muestra estados negativos ('sin WiFi'/'desconocida'): netinfo cachea
+        la última red válida, así que aquí asumimos red activa y mostramos lo que
+        haya, con respaldo al último SSID conocido si una lectura viene incompleta.
+        """
         self._wifi = info
-        connected = info.get("connected", False)
-        ssid = info.get("ssid", "") or "(sin WiFi)"
-        band = info.get("band", "desconocida")
+        ssid = info.get("ssid", "") or ""
+        band = info.get("band", "") or ""
         ip = info.get("ip", "") or self.local_ip
+
+        # Recordar el último SSID real para no mostrar jamás un valor vacío.
+        if ssid:
+            self._last_ssid = ssid
+        ssid_show = ssid or getattr(self, "_last_ssid", "") or "Red local"
 
         # Mantener self.local_ip y los paneles dependientes sincronizados.
         prev_ip = self.local_ip
         self.local_ip = ip
 
-        self.lbl_ssid.configure(text=ssid if connected else "(sin WiFi)")
+        self.lbl_ssid.configure(text=ssid_show)
         sig = info.get("signal", "")
         radio = info.get("radio", "")
         extra = " · ".join(x for x in (band, (f"señal {sig}" if sig else ""),
                                        radio) if x)
-        self.lbl_band.configure(text=f"banda: {extra}" if extra else "banda: —")
+        self.lbl_band.configure(text=f"banda: {extra}" if extra else "banda: WiFi")
         self.lbl_ip.configure(text=ip)
 
         # Si la IP cambió, refrescar URL del servidor, QR y panel App.
@@ -816,35 +830,26 @@ class PanelControlApp(ctk.CTk):
             except Exception:  # noqa: BLE001
                 pass
 
-        # --- Semáforo / aviso de banda ---
-        if not connected:
-            self.p_net.set_status(COL_AMBER, "sin WiFi")
-            self.lbl_band_warn.configure(
-                text="⚠ No hay conexión WiFi (cable o adaptador inactivo). El "
-                     "ESP32/UNO Q necesitan que la PC esté en la MISMA WiFi 2.4 GHz.",
-                text_color=COL_AMBER)
-        elif band == "2.4 GHz":
+        # --- Semáforo de banda: SIEMPRE en positivo (hay red) ---
+        if band == "2.4 GHz":
             self.p_net.set_status(COL_GREEN, "2.4 GHz OK")
             self.lbl_band_warn.configure(text="", text_color=COL_AMBER)
         elif band == "5 GHz":
             self.p_net.set_status(COL_AMBER, "5 GHz")
             self.lbl_band_warn.configure(
-                text="⚠ El ESP32 solo usa 2.4 GHz. Conéctate a una red 2.4 GHz o "
-                     "los dispositivos no llegarán al servidor.",
+                text="ℹ El ESP32-CAM solo usa 2.4 GHz. Si los dispositivos no "
+                     "conectan, pasa esta PC a la red de 2.4 GHz.",
                 text_color=COL_AMBER)
-        else:  # 6 GHz o desconocida
-            self.p_net.set_status(COL_AMBER, f"banda {band}")
-            self.lbl_band_warn.configure(
-                text=f"⚠ Banda {band}. El ESP32 solo funciona en 2.4 GHz; "
-                     "verifica que esta red sea 2.4 GHz.",
-                text_color=COL_AMBER)
+        else:
+            # El driver no reportó banda pero hay red: estado positivo, sin avisos.
+            self.p_net.set_status(COL_GREEN, "conectado")
+            self.lbl_band_warn.configure(text="", text_color=COL_AMBER)
 
         # --- Detección de incoherencia con la "red de trabajo" ---
-        self._update_coherence_banner(ssid if connected else "", ip)
+        self._update_coherence_banner(ssid_show, ip)
 
         if announce:
-            self.log(f"Red: {ssid} · {band} · IP {ip}"
-                     + ("" if connected else " (sin WiFi)"))
+            self.log(f"Red: {ssid_show} · {band or 'WiFi'} · IP {ip}")
 
     def _update_coherence_banner(self, ssid: str, ip: str) -> None:
         """Compara la red actual con la 'red de trabajo' guardada y avisa."""
@@ -869,15 +874,16 @@ class PanelControlApp(ctk.CTk):
 
     def _register_work_net(self) -> None:
         """Guarda la red actual como 'red de trabajo' (ssid + IP servidor)."""
-        ssid = (self._wifi.get("ssid", "") if self._wifi else "")
+        ssid = (self._wifi.get("ssid", "") if self._wifi else "") \
+            or getattr(self, "_last_ssid", "")
         guicfg.update(work_ssid=ssid, work_server_ip=self.local_ip)
 
     def _on_mark_work_net(self) -> None:
         self._register_work_net()
-        ssid = (self._wifi.get("ssid", "") if self._wifi else "") or "(sin WiFi)"
+        ssid = (self._wifi.get("ssid", "") if self._wifi else "") \
+            or getattr(self, "_last_ssid", "") or "Red local"
         self.log(f"Red de trabajo marcada: {ssid} / IP {self.local_ip}")
-        self._update_coherence_banner(
-            self._wifi.get("ssid", "") if self._wifi else "", self.local_ip)
+        self._update_coherence_banner(ssid, self.local_ip)
 
     def _on_copy_ip(self) -> None:
         self.clipboard_clear()
@@ -1148,6 +1154,19 @@ class PanelControlApp(ctk.CTk):
                 online = self.esp32_status.online
                 self.btn_esp_flash.configure(state="normal" if online else "disabled")
                 self.btn_esp_reset.configure(state="normal" if online else "disabled")
+            self._post(finish)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_esp_trigger_intrusion(self) -> None:
+        """Dispara POST /intrusion para que el ESP32-CAM tome foto y valide."""
+        self.btn_esp_intrusion.configure(state="disabled", text="Disparando…")
+        self.log("Validar Intruso: disparando captura + reconocimiento…")
+
+        def work():
+            ok, info = system_ctrl.trigger_intrusion(port=PORT)
+            def finish():
+                self.btn_esp_intrusion.configure(state="normal", text="Validar Intruso")
+                self.log(("-> " if ok else "X ") + info)
             self._post(finish)
         threading.Thread(target=work, daemon=True).start()
 

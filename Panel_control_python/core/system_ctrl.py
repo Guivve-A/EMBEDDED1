@@ -38,3 +38,14 @@ def disarm(host: str = "127.0.0.1", port: int = 8000, timeout: float = 4.0) -> t
         return False, f"El servidor respondió {r.status_code} al desarmar."
     except requests.RequestException as exc:
         return False, f"No se pudo contactar el servidor (¿está montado?): {exc}"
+
+
+def trigger_intrusion(host: str = "127.0.0.1", port: int = 8000, timeout: float = 6.0) -> tuple[bool, str]:
+    """POST /intrusion — dispara captura + validación facial desde el ESP32-CAM."""
+    try:
+        r = requests.post(f"{_base(host, port)}/intrusion", timeout=timeout)
+        if r.status_code == 200:
+            return True, "Intrusion disparada: el ESP32-CAM tomará foto y validará."
+        return False, f"El servidor respondió {r.status_code}."
+    except requests.RequestException as exc:
+        return False, f"No se pudo contactar el servidor (¿está montado?): {exc}"

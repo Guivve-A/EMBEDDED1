@@ -7,9 +7,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -61,16 +63,16 @@ fun EnrollScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Galería: photo picker (no requiere permiso).
+    // Galería: permite elegir varias fotos a la vez (hasta TARGET_SAMPLES).
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> uri?.let { vm.setPhoto(it) } }
+        ActivityResultContracts.PickMultipleVisualMedia(EnrollViewModel.TARGET_SAMPLES),
+    ) { uris -> uris.forEach { vm.addPhoto(it) } }
 
     // Cámara: TakePicture devuelve éxito y escribe en la Uri que le pasamos.
     var cameraTarget by remember { mutableStateOf<Uri?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
-    ) { success -> if (success) cameraTarget?.let { vm.setPhoto(it) } }
+    ) { success -> if (success) cameraTarget?.let { vm.addPhoto(it) } }
 
     // Lanza la cámara creando la Uri destino (solo cuando hay permiso CAMERA).
     val openCamera: () -> Unit = {
@@ -90,35 +92,61 @@ fun EnrollScreen(
     }
 
     if (ui.success) {
-        EnrollSuccess(person = ui.successPerson ?: "", onDone = { vm.reset(); onBack() })
+        EnrollSuccess(
+            person = ui.successPerson ?: "",
+            samples = ui.successSamples,
+            onDone = { vm.reset(); onBack() },
+        )
         return
     }
 
     PremiumScreen(title = "Aprender Rostro", subtitle = "Registrar persona autorizada", onBack = onBack) {
         Column(verticalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
 
-            // Preview circular dorado.
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Box(
-                    modifier = Modifier
-                        .size(160.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(SurfaceCard),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (ui.photoUri != null) {
-                        AsyncImage(
-                            model = ui.photoUri,
-                            contentDescription = "Foto seleccionada",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(160.dp).clip(RoundedCornerShape(50)),
-                        )
-                    } else {
+            // Contador de muestras + guía + miniaturas (toca una para quitarla).
+            Text(
+                text = "Tomas: ${ui.photos.size} de ${EnrollViewModel.TARGET_SAMPLES}",
+                style = MaterialTheme.typography.titleMedium,
+                color = GoldPrimary,
+            )
+            Text(
+                text = "Toma ${EnrollViewModel.TARGET_SAMPLES} fotos variadas (ángulo, expresión " +
+                    "y luz) para que el sistema aprenda mejor el rostro. Toca una miniatura para quitarla.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+            )
+            if (ui.photos.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(SurfaceCard),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Icon(
                             Icons.Outlined.Person,
                             contentDescription = null,
                             tint = GoldPrimary,
-                            modifier = Modifier.size(64.dp),
+                            modifier = Modifier.size(56.dp),
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    ui.photos.forEachIndexed { index, uri ->
+                        AsyncImage(
+                            model = uri,
+                            contentDescription = "Toma ${index + 1}",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(58.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(SurfaceCard)
+                                .clickable { vm.removePhoto(index) },
                         )
                     }
                 }
@@ -144,8 +172,10 @@ fun EnrollScreen(
             GhostButton(
                 text = "Tomar foto",
                 onClick = {
-                    // Si ya hay permiso, abrir cámara; si no, solicitarlo en runtime.
-                    if (cameraPermission.status.isGranted) {
+                    if (ui.photos.size >= EnrollViewModel.TARGET_SAMPLES) {
+                        vm.setError("Ya tienes ${EnrollViewModel.TARGET_SAMPLES} tomas. Quita alguna para añadir otra.")
+                    } else if (cameraPermission.status.isGranted) {
+                        // Si ya hay permiso, abrir cámara; si no, solicitarlo en runtime.
                         openCamera()
                     } else {
                         cameraPermission.launchPermissionRequest()
@@ -168,7 +198,7 @@ fun EnrollScreen(
             }
 
             GoldButton(
-                text = if (ui.submitting) "Registrando…" else "Registrar",
+                text = if (ui.submitting) "Registrando…" else "Registrar (${ui.photos.size} muestras)",
                 onClick = { vm.submit() },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = ui.canSubmit,
@@ -178,7 +208,7 @@ fun EnrollScreen(
 }
 
 @Composable
-private fun EnrollSuccess(person: String, onDone: () -> Unit) {
+private fun EnrollSuccess(person: String, samples: Int, onDone: () -> Unit) {
     PremiumScreen(title = "Registrado", subtitle = "Rostro aprendido") {
         Column(verticalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -193,7 +223,7 @@ private fun EnrollSuccess(person: String, onDone: () -> Unit) {
                 }
             }
             Text(
-                text = "\"$person\" fue registrado correctamente.",
+                text = "\"$person\" fue registrado con $samples muestra(s).",
                 style = MaterialTheme.typography.titleMedium,
                 color = TextPrimary,
             )

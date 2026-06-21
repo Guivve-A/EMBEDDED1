@@ -76,9 +76,22 @@ DEVICE_STATUS_FILE = Path(_env_str("DEVICE_STATUS_FILE", str(STORAGE_DIR / "devi
 # El motor real (DeepFace/ArcFace) llega en FASE 7; aquí solo la config.
 # ---------------------------------------------------------------------------
 DEEPFACE_MODEL = _env_str("DEEPFACE_MODEL", "ArcFace")
-DEEPFACE_DETECTOR = _env_str("DEEPFACE_DETECTOR", "opencv")
-# Threshold de distancia/similitud para aceptar un match. Ajustable sin recompilar.
-THRESHOLD = _env_float("THRESHOLD", 0.6)
+# Detector de caras. "retinaface" alinea mucho mejor que "opencv" (Haar), lo que
+# es CRÍTICO: ArcFace es muy sensible a la alineación; un detector flojo hace que
+# embeddings de personas distintas "deriven" y se confundan. Ajustable por .env
+# (alternativas: "mtcnn" más rápido, "opencv" el más flojo).
+DEEPFACE_DETECTOR = _env_str("DEEPFACE_DETECTOR", "retinaface")
+# Similitud coseno mínima (probe vs mejor foto enrolada) para aceptar un match.
+# Estricto pero tolerante a la calidad de la ESP32-CAM. Ajustable sin recompilar.
+THRESHOLD = _env_float("THRESHOLD", 0.65)
+# Margen mínimo entre el 1er y 2do candidato para aceptar un match.
+# Si la diferencia es menor, el match se rechaza como ambiguo (evita confundir
+# a una persona con otra parecida en la galería).
+AMBIGUITY_MARGIN = _env_float("AMBIGUITY_MARGIN", 0.06)
+# Coincidencias CONSECUTIVAS de la misma persona que el servidor exige antes de
+# autorizar el acceso (consenso multi-frame). Reduce falsos positivos puntuales
+# de un solo fotograma VGA comprimido. 1 = comportamiento de un solo frame.
+CONSENSUS_FRAMES = _env_int("CONSENSUS_FRAMES", 2)
 
 # ---------------------------------------------------------------------------
 # Secretos / integraciones externas — placeholders.

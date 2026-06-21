@@ -24,12 +24,13 @@ data class ArmResponse(
     val armed: Boolean,
 )
 
-/** Respuesta de POST /enroll -> { enrolled, person, n_photos }. */
+/** Respuesta de POST /enroll -> { enrolled, person, n_photos, n_valid }. */
 @Serializable
 data class EnrollResponse(
     val enrolled: Boolean,
     val person: String,
     val n_photos: Int,
+    val n_valid: Int = 0,
 )
 
 /** Item de GET /enrolled -> { name, n_embeddings, enrolled_at }. */

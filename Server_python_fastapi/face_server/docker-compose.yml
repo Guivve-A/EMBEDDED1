@@ -1,0 +1,42 @@
+# =============================================================================
+#  docker-compose.yml — Servidor EMBEBIDOS_1 (reconocimiento facial + alertas)
+# -----------------------------------------------------------------------------
+#  Levanta el servidor en cualquier computadora con Docker, con un solo comando:
+#
+#      docker compose up -d --build
+#
+#  Detener:        docker compose down
+#  Ver logs:       docker compose logs -f
+#
+#  Requisitos en la máquina destino:
+#    1. Docker Desktop (Windows/Mac) o Docker Engine (Linux).
+#    2. Un archivo .env en esta carpeta (copia .env.example -> .env y edítalo;
+#       Telegram/FCM son opcionales: si se dejan vacíos, el servidor igual corre).
+#    3. (Opcional) secrets/serviceAccountKey.json para notificaciones FCM.
+#
+#  Los DATOS persisten en ./storage (embeddings, fotos, eventos) aunque borres y
+#  recrees el contenedor. Los dispositivos de la LAN apuntan a  http://IP_PC:8000.
+# =============================================================================
+services:
+  face-server:
+    build: .
+    image: embebidos1-face-server:latest
+    container_name: embebidos1-face-server
+    restart: unless-stopped
+
+    # Publica el 8000 en TODAS las interfaces del host → el ESP32-CAM, el UNO Q
+    # y la app de la LAN llegan vía http://<IP-de-esta-PC>:8000.
+    ports:
+      - "8000:8000"
+
+    # Carga las variables del .env (HOST/PORT/THRESHOLD/TELEGRAM/…). El archivo
+    # debe existir: copia .env.example -> .env en esta carpeta.
+    env_file:
+      - .env
+
+    volumes:
+      # Datos persistentes (sobreviven a recrear el contenedor).
+      - ./storage:/app/storage
+      # Credenciales de Firebase para FCM (solo lectura). Si no usas FCM, la
+      # carpeta puede ir vacía; el servidor arranca igual.
+      - ./secrets:/app/secrets:ro

@@ -1,0 +1,33 @@
+# Qué NO copiar a la imagen (build context limpio + sin secretos/datos).
+
+# Entornos virtuales (enormes y específicos del SO del host)
+.venv/
+venv/
+env/
+
+# Secretos y config local: se MONTAN en runtime, nunca se hornean
+.env
+secrets/
+
+# Datos generados: se MONTAN como volumen (storage/)
+storage/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Respaldos / backups grandes
+*.bak-*
+*.bak
+*.rar
+*.zip
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docs/herramientas no necesarias dentro de la imagen
+webcam_verify.py

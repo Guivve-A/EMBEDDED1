@@ -417,6 +417,9 @@ import json  # noqa: E402  (import local agrupado con su helper para claridad)
 #                            UNO Q distinga un resultado nuevo de uno ya visto.
 #   intruder_notified: bool — en el episodio actual ya se envió la alerta de
 #                            intruso (rate-limit: 1 aviso por episodio, no por frame).
+#   consensus_person: str|None — persona que acumula coincidencias consecutivas.
+#   consensus_count: int   — nº de frames seguidos que coincidieron con consensus_person.
+#                            Se autoriza el acceso solo al llegar a CONSENSUS_FRAMES.
 _DEFAULT_STATE: dict = {
     "armed": False,
     "last_event_ts": None,
@@ -425,6 +428,8 @@ _DEFAULT_STATE: dict = {
     "last_result": None,
     "result_seq": 0,
     "intruder_notified": False,
+    "consensus_person": None,
+    "consensus_count": 0,
 }
 
 
@@ -453,6 +458,10 @@ def _read_state_raw() -> dict:
         state["result_seq"] = int(state.get("result_seq", 0))
     except (TypeError, ValueError):
         state["result_seq"] = 0
+    try:
+        state["consensus_count"] = int(state.get("consensus_count", 0))
+    except (TypeError, ValueError):
+        state["consensus_count"] = 0
     return state
 
 
@@ -501,6 +510,8 @@ def _clear_transient(state: dict) -> None:
     state["capture_ts"] = None
     state["last_result"] = None
     state["intruder_notified"] = False
+    state["consensus_person"] = None
+    state["consensus_count"] = 0
 
 
 def _set_armed(armed: bool) -> dict:
@@ -532,46 +543,96 @@ def _set_capture_pending(ts: str) -> dict:
              capture_ts (no acumulan estado); preserva armed/last_event_ts/last_result/seq.
     """
     state = _read_state_raw()
-    # Un nuevo episodio (no estaba pendiente) reinicia el rate-limit de intruso.
+    # Un nuevo episodio (no estaba pendiente) reinicia el rate-limit de intruso
+    # y el consenso multi-frame (no arrastrar votos de un episodio anterior).
     if not state.get("capture_pending"):
         state["intruder_notified"] = False
+        state["consensus_person"] = None
+        state["consensus_count"] = 0
     state["capture_pending"] = True
     state["capture_ts"] = ts
     _write_state_raw(state)
     return state
 
 
-def _consume_capture_with_result(result: dict) -> bool:
+def _consume_capture_with_result(result: dict) -> dict:
     """
-    Guarda el resultado de /verify (sube result_seq) y decide capture_pending.
+    Aplica el CONSENSO MULTI-FRAME sobre el resultado crudo de /verify y decide
+    capture_pending, last_result y qué notificación procede.
 
-    Loop "intruso hasta propietario": SOLO una cara AUTORIZADA (match) consume la
-    intrusión → capture_pending=False. Si NO hay match, se MANTIENE pending para
-    que el ESP32 siga capturando y reanalizando hasta que aparezca el propietario.
-    result_seq sube siempre para que el UNO Q detecte cada resultado como nuevo.
-    Preserva armed/last_event_ts/capture_ts.
+    Idea: una sola captura VGA comprimida es frágil, así que NO se autoriza el
+    acceso con un único frame. Se exige `config.CONSENSUS_FRAMES` coincidencias
+    CONSECUTIVAS de la MISMA persona. Mientras se acumulan, NO se actualiza
+    last_result ni result_seq (el UNO Q sigue "armado/esperando": ni verde ni rojo
+    espurios) y se mantiene capture_pending para que el ESP32 siga capturando.
 
-    Inputs:  result — dict { match, person, confidence, photo_id, ts }.
-    Outputs: notify_intruder — True solo en la PRIMERA detección de intruso del
-             episodio (rate-limit de alertas; evita spam de Telegram/FCM por frame).
+    - Match CRUDO + consenso alcanzado → AUTORIZADO: last_result.match=true,
+      capture_pending=false (consume la intrusión), notify_match=True.
+    - Match CRUDO sin consenso aún      → acumula en silencio, sigue capturando.
+    - No-match CRUDO (intruso)          → rompe el consenso, emite last_result
+      (rojo) inmediato y mantiene el loop; notify_intruder solo en el 1º del episodio.
+    - DESARMADO                         → registra resultado y corta el pending.
+
+    Inputs:  result — dict { match, person, confidence, photo_id, ts } (crudo, por frame).
+    Outputs: dict { notify_match: bool, notify_intruder: bool } — qué alerta enviar.
     """
     state = _read_state_raw()
-    is_match = bool(result.get("match"))
     armed = bool(state.get("armed"))
-    # Loop "intruso hasta propietario" SOLO mientras el sistema esté ARMADO.
-    # Si está DESARMADO (el usuario apagó la vigilancia), una captura tardía NO
-    # debe re-activar el loop: capture_pending=False corta el re-disparo del ESP32.
-    state["capture_pending"] = (not is_match) and armed
-    state["result_seq"] = int(state.get("result_seq", 0)) + 1
-    enriched = dict(result)
-    enriched["seq"] = state["result_seq"]
-    state["last_result"] = enriched
+    raw_match = bool(result.get("match"))
+    person = result.get("person", "unknown")
+
+    def _emit(res: dict) -> None:
+        """Publica un resultado nuevo para el UNO Q (sube result_seq)."""
+        state["result_seq"] = int(state.get("result_seq", 0)) + 1
+        enriched = dict(res)
+        enriched["seq"] = state["result_seq"]
+        state["last_result"] = enriched
+
+    # Sistema DESARMADO: una captura tardía no re-activa el loop. Se registra el
+    # resultado y se corta el pending (sin consenso, sin alertas).
+    if not armed:
+        state["capture_pending"] = False
+        state["consensus_person"] = None
+        state["consensus_count"] = 0
+        _emit(result)
+        _write_state_raw(state)
+        return {"notify_match": False, "notify_intruder": False}
+
+    # --- ARMADO ---
+    if raw_match:
+        # Acumular votos consecutivos por persona.
+        if person == state.get("consensus_person"):
+            state["consensus_count"] = int(state.get("consensus_count", 0)) + 1
+        else:
+            state["consensus_person"] = person
+            state["consensus_count"] = 1
+        need = max(1, int(getattr(config, "CONSENSUS_FRAMES", 2)))
+
+        if state["consensus_count"] >= need:
+            # Consenso alcanzado → acceso autorizado confirmado.
+            state["capture_pending"] = False
+            state["consensus_person"] = None
+            state["consensus_count"] = 0
+            _emit(result)  # match=true
+            _write_state_raw(state)
+            return {"notify_match": True, "notify_intruder": False}
+
+        # Aún sin consenso: seguir capturando SIN emitir (UNO Q sin cambios).
+        state["capture_pending"] = True
+        _write_state_raw(state)
+        return {"notify_match": False, "notify_intruder": False}
+
+    # No-match crudo → intruso: romper consenso, emitir rojo y mantener el loop.
+    state["consensus_person"] = None
+    state["consensus_count"] = 0
+    state["capture_pending"] = True
+    _emit(result)
     notify_intruder = False
-    if armed and not is_match and not state.get("intruder_notified"):
+    if not state.get("intruder_notified"):
         state["intruder_notified"] = True
         notify_intruder = True
     _write_state_raw(state)
-    return notify_intruder
+    return {"notify_match": False, "notify_intruder": notify_intruder}
 
 
 # --------------------------------------------------------------------------- #
@@ -697,11 +758,11 @@ async def verify(
     await _insert_event(ts_iso, match, person, confidence, photo_id, latency_ms)
     _touch_last_event(ts_iso)
 
-    # 3b) Coordinación sin cables (Parte 1, Ing3): guardar el resultado como
-    #     last_result y apagar capture_pending (esta captura consumió la
-    #     intrusión). result_seq sube para que el UNO Q lo vea como nuevo.
-    #     NO altera el formato de la respuesta de /verify (solo estado interno).
-    notify_intruder = _consume_capture_with_result(
+    # 3b) Coordinación sin cables + CONSENSO MULTI-FRAME (Parte 1, Ing3): aplica el
+    #     consenso, actualiza last_result/capture_pending y decide qué alerta toca.
+    #     NO altera el formato de la respuesta de /verify (devuelve el crudo por
+    #     frame); la decisión de autorización vive en el estado (/last-result).
+    decision = _consume_capture_with_result(
         {
             "match": match,
             "person": person,
@@ -712,11 +773,12 @@ async def verify(
     )
 
     # 4) Notificaciones en background (no bloquean la respuesta al Arduino).
-    #    En el loop "intruso hasta propietario" el ESP32 hace muchas capturas
-    #    seguidas; para no spamear, la alerta de intruso (no-match) se envía solo
-    #    en la PRIMERA del episodio (notify_intruder). El acceso autorizado
-    #    (match) siempre se notifica.
-    if match or notify_intruder:
+    #    - Acceso autorizado: SOLO cuando el consenso multi-frame se confirma
+    #      (notify_match), no en cada frame que coincide.
+    #    - Intruso: solo en el PRIMERO del episodio (notify_intruder), para no
+    #      spamear en el loop "intruso hasta propietario".
+    #    En ambos casos `match` (crudo) coincide con el tipo de alerta a enviar.
+    if decision["notify_match"] or decision["notify_intruder"]:
         background_tasks.add_task(
             telegram_service.send_alert, match, person, confidence, str(final_path)
         )
@@ -738,37 +800,55 @@ async def verify(
 @app.post("/enroll", tags=["enrollment"])
 async def enroll(
     name: str = Form(..., description="Nombre de la persona a enrolar"),
-    file: UploadFile = File(..., description="Foto de la persona (JPEG)"),
+    file: list[UploadFile] = File(..., description="Una o más fotos (JPEG) de la persona"),
+    replace: bool = Form(
+        False,
+        description="True = re-aprende desde cero con estas fotos (reemplaza la "
+        "galería previa); False = añade muestras a las existentes.",
+    ),
 ) -> dict:
     """
-    Enrola una persona a partir de una foto.
+    Enrola una persona a partir de UNA o VARIAS fotos.
+
+    Recomendación de precisión: enviar ~5 fotos variadas (ángulo/expresión/luz)
+    con replace=True para que el sistema aprenda el rostro con varias muestras.
+    Cada foto válida se guarda como una muestra independiente en la galería (no se
+    promedian), lo que mejora notablemente la separación entre personas.
 
     Flujo:
-        1. Guarda la foto en storage/photos/enroll_{ISO8601}_{name}.jpg.
-        2. Delega en enrollment.enroll() (stub Fase 6).
+        1. Guarda cada foto en storage/photos/enroll_{ISO8601}_{name}.jpg.
+        2. Delega en enrollment.enroll() (DeepFace + ArcFace) con replace.
 
-    Inputs (form):
-        name: str          — nombre/clave de la persona.
-        file: UploadFile   — la foto.
+    Inputs (multipart form):
+        name:    str               — nombre/clave de la persona.
+        file:    list[UploadFile]  — una o más fotos (parts con el mismo nombre "file").
+        replace: bool              — reemplazar (re-aprender) o añadir muestras.
     Outputs (dict):
-        { enrolled, person, n_photos }
+        { enrolled, person, n_photos, n_valid }
     """
     if not name.strip():
         raise HTTPException(status_code=400, detail="El nombre no puede estar vacío")
-
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Archivo vacío")
+    if not file:
+        raise HTTPException(status_code=400, detail="No se recibió ninguna foto")
 
     now = datetime.now(timezone.utc)
-    ts_fs = now.strftime("%Y%m%dT%H%M%S%fZ")
     safe_name = "".join(c for c in name if c.isalnum() or c in ("-", "_")) or "person"
-    photo_name = f"enroll_{ts_fs}_{safe_name}.jpg"
-    photo_path = config.PHOTOS_DIR / photo_name
-    with open(photo_path, "wb") as f:
-        f.write(raw)
+    saved_paths: list[str] = []
+    for idx, up in enumerate(file):
+        raw = await up.read()
+        if not raw:
+            continue  # ignora partes vacías; abajo validamos que quede al menos una
+        ts_fs = now.strftime("%Y%m%dT%H%M%S%fZ")
+        photo_name = f"enroll_{ts_fs}_{idx}_{safe_name}.jpg"
+        photo_path = config.PHOTOS_DIR / photo_name
+        with open(photo_path, "wb") as f:
+            f.write(raw)
+        saved_paths.append(str(photo_path))
 
-    result = await enrollment.enroll(name, [str(photo_path)])
+    if not saved_paths:
+        raise HTTPException(status_code=400, detail="Todas las fotos venían vacías")
+
+    result = await enrollment.enroll(name, saved_paths, replace=replace)
     return result
 
 

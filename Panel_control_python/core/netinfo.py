@@ -20,9 +20,15 @@ import re
 import socket
 import subprocess
 import sys
+import time
 
 # Flag para que el subprocess de netsh no abra ventana de consola en Windows.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+# Caché de la ÚLTIMA red WiFi válida (connected=True) que se leyó. Permite que
+# current_wifi() NUNCA devuelva un estado negativo por una lectura transitoria de
+# netsh: si una lectura falla, se reutiliza la última buena (refrescando la IP).
+_LAST_GOOD_WIFI: dict | None = None
 
 
 def _ip_via_udp() -> str | None:
@@ -151,18 +157,18 @@ def _norm(s: str) -> str:
 
 
 def _band_from_channel(channel: str | None) -> str:
-    """Infiere la banda a partir del número de canal WiFi."""
+    """Infiere la banda a partir del número de canal WiFi ('' si no se puede)."""
     if not channel:
-        return "desconocida"
+        return ""
     m = re.search(r"\d+", channel)
     if not m:
-        return "desconocida"
+        return ""
     ch = int(m.group(0))
     if 1 <= ch <= 14:
         return "2.4 GHz"
     if ch >= 32:
         return "5 GHz"
-    return "desconocida"
+    return ""
 
 
 def _normalize_band(raw: str | None, channel: str | None) -> str:
@@ -178,28 +184,25 @@ def _normalize_band(raw: str | None, channel: str | None) -> str:
     return _band_from_channel(channel)
 
 
-def current_wifi() -> dict:
+def _read_wifi_once() -> dict:
     """
-    Devuelve un dict con la red WiFi a la que está conectada esta PC (Windows).
+    Lee UNA vez la red WiFi actual vía `netsh wlan show interfaces` (Windows).
 
-    Ejecuta `netsh wlan show interfaces` y parsea (robusto a español/inglés):
-        connected (bool), ssid, band ("2.4 GHz"/"5 GHz"/"desconocida"),
-        channel, signal (% como str), radio, state, ip (IP local).
-
-    Nunca lanza. Fuera de Windows o sin WiFi/adaptador devuelve connected=False
-    (con un campo `error` explicando el motivo). La IP local SIEMPRE se incluye
-    (vía local_ip()) aunque la conexión sea por cable.
+    Parsea (robusto a español/inglés): connected (bool), ssid, band
+    ("2.4 GHz"/"5 GHz"/""), channel, signal (% como str), radio, state, ip.
+    Nunca lanza. La IP local SIEMPRE se incluye (vía local_ip()).
     """
     result: dict = {
         "connected": False,
         "ssid": "",
-        "band": "desconocida",
+        "band": "",
         "channel": "",
         "signal": "",
         "radio": "",
         "state": "",
         "ip": local_ip(),
         "error": "",
+        "stale": False,
     }
 
     if sys.platform != "win32":
@@ -269,6 +272,47 @@ def current_wifi() -> dict:
             result["error"] = "Sin conexión WiFi (cable o adaptador inactivo)."
 
     return result
+
+
+def current_wifi() -> dict:
+    """
+    Red WiFi actual de la PC, SIEMPRE con un resultado utilizable.
+
+    Estrategia "nunca desconocido": intenta leer la red varias veces (netsh a
+    veces devuelve vacíos transitorios al refrescar). En cuanto obtiene una
+    lectura conectada, la cachea y la devuelve. Si la lectura del momento falla,
+    reutiliza la ÚLTIMA red válida conocida (refrescando la IP y marcándola
+    `stale=True`) en vez de regresar un estado negativo. Así, al cambiar de red,
+    la primera lectura conectada nueva reemplaza la caché y se muestra la red
+    nueva con todos sus parámetros.
+
+    Nunca lanza.
+    """
+    global _LAST_GOOD_WIFI
+
+    info = _read_wifi_once()
+    attempts = 0
+    # Reintentos cortos ante lecturas transitorias no conectadas (no bloquea la UI:
+    # corre en el hilo de monitoreo). Máx ~0.8 s extra solo si está desconectada.
+    while not info.get("connected") and attempts < 2:
+        time.sleep(0.4)
+        info = _read_wifi_once()
+        attempts += 1
+
+    if info.get("connected"):
+        _LAST_GOOD_WIFI = dict(info)
+        return info
+
+    # Lectura negativa: si hay una red válida previa, devolverla (refrescando IP).
+    if _LAST_GOOD_WIFI is not None:
+        cached = dict(_LAST_GOOD_WIFI)
+        cached["ip"] = local_ip()
+        cached["stale"] = True
+        cached["error"] = ""
+        return cached
+
+    # Nunca hubo una buena (arranque sin WiFi): devolver lo que haya, sin romper.
+    return info
 
 
 if __name__ == "__main__":

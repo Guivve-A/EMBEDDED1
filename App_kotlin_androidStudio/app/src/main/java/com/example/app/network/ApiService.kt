@@ -4,6 +4,7 @@ import okhttp3.MultipartBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
@@ -27,11 +28,16 @@ interface ApiService {
     @POST("disarm")
     suspend fun disarm(): ArmResponse
 
+    // Timeout largo: el enroll hace inferencia pesada (RetinaFace + ArcFace) que
+    // puede tardar decenas de segundos, sobre todo en la 1ª llamada.
+    // El valor debe coincidir con NetworkModule.LONG_TIMEOUT_HEADER.
+    @Headers("X-Long-Timeout: 120")
     @Multipart
     @POST("enroll")
     suspend fun enroll(
         @Part("name") name: okhttp3.RequestBody,
-        @Part file: MultipartBody.Part,
+        @Part files: List<MultipartBody.Part>,
+        @Part("replace") replace: okhttp3.RequestBody,
     ): EnrollResponse
 
     @GET("enrolled")

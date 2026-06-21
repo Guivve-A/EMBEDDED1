@@ -28,7 +28,9 @@ class EnrollmentService:
         """
         self._recognition = recognition
 
-    async def enroll(self, name: str, image_paths: list[ImageInput]) -> dict:
+    async def enroll(
+        self, name: str, image_paths: list[ImageInput], replace: bool = False
+    ) -> dict:
         """
         Enrola una persona a partir de una o más fotos ya guardadas.
 
@@ -38,11 +40,13 @@ class EnrollmentService:
         Inputs:
             name:        nombre de la persona.
             image_paths: rutas (str/Path) y/o np.ndarray con las fotos.
+            replace:     True = reemplaza la galería de la persona con estas fotos
+                         (re-aprender desde cero, atómico); False = añade muestras.
         Outputs:
             dict { enrolled, person, n_photos, n_valid } (ver recognition.enroll).
         """
         return await anyio.to_thread.run_sync(
-            self._recognition.enroll, name, image_paths
+            self._recognition.enroll, name, image_paths, replace
         )
 
     async def list_enrolled(self) -> list[dict]:

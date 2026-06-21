@@ -81,12 +81,23 @@ class FaceRepository(
     suspend fun registerFcm(token: String): ApiResult<FcmRegisterResponse> =
         call { it.registerFcm(FcmRegisterBody(token)) }
 
-    /** Enrola una persona enviando un JPEG (multipart) desde un File temporal. */
-    suspend fun enroll(name: String, jpeg: File): ApiResult<EnrollResponse> = call { service ->
+    /**
+     * Enrola una persona enviando UNA o VARIAS fotos (multipart) en una sola
+     * petición. Con replace=true el servidor re-aprende el rostro desde cero con
+     * estas muestras (atómico); con false las añade a las existentes.
+     */
+    suspend fun enroll(
+        name: String,
+        jpegs: List<File>,
+        replace: Boolean,
+    ): ApiResult<EnrollResponse> = call { service ->
         val namePart = name.toRequestBody("text/plain".toMediaType())
-        val fileBody = jpeg.asRequestBody("image/jpeg".toMediaType())
-        val filePart = MultipartBody.Part.createFormData("file", jpeg.name, fileBody)
-        service.enroll(namePart, filePart)
+        val fileParts = jpegs.map { jpeg ->
+            val body = jpeg.asRequestBody("image/jpeg".toMediaType())
+            MultipartBody.Part.createFormData("file", jpeg.name, body)
+        }
+        val replacePart = replace.toString().toRequestBody("text/plain".toMediaType())
+        service.enroll(namePart, fileParts, replacePart)
     }
 
     suspend fun saveConfig(host: String, port: String) = settings.save(host, port)

@@ -96,6 +96,10 @@ class FaceRecognitionService:
     # Dimensión esperada del embedding de ArcFace.
     EMBED_DIM: int = 512
 
+    # Máximo de fotos (filas) que se conservan por persona en la galería. Acota
+    # memoria y tiempo de verify sin perder variedad útil de poses/iluminación.
+    MAX_SAMPLES: int = 50
+
     def __init__(self) -> None:
         """Inicializa el servicio leyendo configuración y asegurando los stores."""
         self.model_name: str = config.DEEPFACE_MODEL
@@ -152,16 +156,34 @@ class FaceRecognitionService:
             self._write_index({})
 
     def _read_embeddings(self) -> dict:
-        """Lee el dict {name: vector_512} del pickle. Devuelve {} si está corrupto."""
+        """
+        Lee la galería {name: matriz (n_samples, 512)} del pickle.
+
+        Formato actual: una MATRIZ 2-D por persona (una fila L2-normalizada por
+        foto enrolada). Para compatibilidad defensiva, un vector 1-D heredado
+        (formato antiguo de 1 embedding promedio) se promociona a matriz (1, 512).
+        Devuelve {} si el archivo no existe o está corrupto.
+        """
         try:
             with open(self.embeddings_file, "rb") as f:
                 data = pickle.load(f)
-            return data if isinstance(data, dict) else {}
         except (FileNotFoundError, EOFError, pickle.UnpicklingError):
             return {}
+        if not isinstance(data, dict):
+            return {}
+        gallery: dict = {}
+        for name, val in data.items():
+            if not isinstance(val, np.ndarray):
+                continue  # descarta None / placeholders heredados
+            arr = val.astype(np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)  # 1-D heredado → matriz (1, 512)
+            if arr.ndim == 2 and arr.shape[1] == self.EMBED_DIM:
+                gallery[name] = arr
+        return gallery
 
     def _write_embeddings(self, embeddings: dict) -> None:
-        """Persiste el dict {name: vector_512} en el pickle."""
+        """Persiste el dict {name: matriz (n_samples, 512)} en el pickle."""
         self.embeddings_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.embeddings_file, "wb") as f:
             pickle.dump(embeddings, f)
@@ -251,9 +273,10 @@ class FaceRecognitionService:
             reps = self._deepface().represent(
                 img_path=image,                 # DeepFace acepta np.ndarray directamente
                 model_name=self.model_name,     # "ArcFace"
-                detector_backend=self.detector,  # "opencv"
+                detector_backend=self.detector,  # "retinaface" (alineación de calidad)
                 enforce_detection=True,         # sin cara → ValueError
                 align=True,
+                normalization="ArcFace",        # normalización de entrada propia del modelo
             )
         except ValueError:
             # No se detectó cara → caso edge no_face.
@@ -264,9 +287,21 @@ class FaceRecognitionService:
 
         if not reps:
             return None
-        # represent() devuelve una lista (una entrada por cara). Tomamos la 1ª.
-        vec = np.asarray(reps[0]["embedding"], dtype=np.float32)
+        # represent() devuelve una entrada por cara. Si hay varias, elegimos la
+        # de mayor área facial (la cara más prominente / cercana), no la primera
+        # ciegamente — más robusto cuando aparece alguien al fondo.
+        best = max(reps, key=self._face_area)
+        vec = np.asarray(best["embedding"], dtype=np.float32)
         return vec
+
+    @staticmethod
+    def _face_area(rep: dict) -> float:
+        """Área (w*h) de la caja facial de un resultado de DeepFace.represent."""
+        fa = rep.get("facial_area") or {}
+        try:
+            return float(fa.get("w", 0)) * float(fa.get("h", 0))
+        except (TypeError, ValueError):
+            return 0.0
 
     def verify(self, image: ImageInput) -> dict:
         """
@@ -278,40 +313,59 @@ class FaceRecognitionService:
         Outputs (dict) — casos edge EXACTOS del contrato:
             - sin cara          → {"match": false, "error": "no_face", "confidence": 0.0}
             - bajo threshold    → {"match": false, "person": "unknown", "confidence": <max_sim>}
+            - ambiguo           → {"match": false, "person": "unknown", "confidence": <max_sim>}
             - match válido      → {"match": true,  "person": <name>,    "confidence": <max_sim>}
 
         Métrica: similitud coseno (mayor = más parecido). Se acepta si la mejor
-        similitud >= self.threshold (config.THRESHOLD, 0.6).
+        similitud >= self.threshold Y el margen con el 2do candidato >= AMBIGUITY_MARGIN.
         """
         arr = self._to_rgb_array(image)
         if arr is None:
-            # No se pudo leer la imagen → la tratamos como "sin cara".
             return {"match": False, "error": "no_face", "confidence": 0.0}
 
         probe = self.get_embedding(arr)
         if probe is None:
             return {"match": False, "error": "no_face", "confidence": 0.0}
 
-        embeddings = self._read_embeddings()
-        # Descartar entradas None (placeholders heredados de la Fase 6 / stub).
-        gallery = {n: v for n, v in embeddings.items() if isinstance(v, np.ndarray)}
+        gallery = self._read_embeddings()  # {name: matriz (n_samples, 512) L2-norm}
         if not gallery:
-            # Nadie enrolado de verdad → desconocido (no es "no_face": sí había cara).
             return {"match": False, "person": "unknown", "confidence": 0.0}
 
         probe_n = self._l2_normalize(probe)
-        best_name = "unknown"
-        best_sim = -1.0
-        for name, vec in gallery.items():
-            sim = self._cosine_similarity(probe_n, vec)  # vec ya está L2-normalizado
-            if sim > best_sim:
-                best_sim = sim
-                best_name = name
 
-        confidence = round(max(0.0, best_sim), 4)  # recorta negativos a 0 para el contrato
-        if best_sim >= self.threshold:
-            return {"match": True, "person": best_name, "confidence": confidence}
-        return {"match": False, "person": "unknown", "confidence": confidence}
+        # Score de cada persona = MEJOR coincidencia entre todas sus fotos enroladas
+        # (no un centroide promediado, que difumina la identidad). Como las filas y
+        # el probe están L2-normalizados, el producto punto ES la similitud coseno.
+        scores: list[tuple[str, float]] = []
+        for name, mat in gallery.items():
+            sims = mat @ probe_n          # (n_samples,) similitudes coseno
+            scores.append((name, float(np.max(sims))))
+        scores.sort(key=lambda x: x[1], reverse=True)
+
+        best_name, best_sim = scores[0]
+        second_sim = scores[1][1] if len(scores) > 1 else -1.0
+
+        logger.info(
+            "verify scores: %s",
+            ", ".join(f"{n}={s:.4f}" for n, s in scores),
+        )
+
+        confidence = round(max(0.0, best_sim), 4)
+
+        if best_sim < self.threshold:
+            return {"match": False, "person": "unknown", "confidence": confidence}
+
+        margin = best_sim - second_sim
+        ambiguity_margin = getattr(config, "AMBIGUITY_MARGIN", 0.05)
+        if len(scores) > 1 and margin < ambiguity_margin:
+            logger.warning(
+                "Match ambiguo: %s=%.4f vs %s=%.4f (margen=%.4f < %.4f)",
+                best_name, best_sim, scores[1][0], second_sim,
+                margin, ambiguity_margin,
+            )
+            return {"match": False, "person": "unknown", "confidence": confidence}
+
+        return {"match": True, "person": best_name, "confidence": confidence}
 
     def enroll(
         self,
@@ -320,7 +374,7 @@ class FaceRecognitionService:
         replace: bool = False,
     ) -> dict:
         """
-        Enrola a una persona: extrae embeddings de sus fotos, promedia y persiste.
+        Enrola a una persona: extrae un embedding por foto y los apila en su galería.
 
         Inputs:
             name:    nombre de la persona (clave única en embeddings.pkl).
@@ -336,11 +390,12 @@ class FaceRecognitionService:
 
         Proceso:
             1. get_embedding por cada imagen (descarta None / sin cara).
-            2. Promedia los embeddings válidos de esta llamada y L2-normaliza.
-            3. Si la persona ya existe y replace=False, fusiona (promedia) con el
-               vector previo y vuelve a L2-normalizar.
-            4. Guarda en embeddings.pkl {name: vector_512 normalizado} y actualiza
-               el índice JSON de metadata.
+            2. L2-normaliza cada embedding válido como una FILA.
+            3. Si la persona ya existe y replace=False, apila (vstack) las filas
+               nuevas sobre su matriz previa; si replace=True, empieza de cero.
+               Se conservan como máximo MAX_SAMPLES filas (las más recientes).
+            4. Guarda en embeddings.pkl {name: matriz (n, 512)} y actualiza el
+               índice JSON de metadata.
         """
         # 1) Extraer embeddings válidos de esta tanda.
         valid_vecs: list[np.ndarray] = []
@@ -360,32 +415,35 @@ class FaceRecognitionService:
             existing = index.get(name, {}).get("n_photos", 0)
             return {"enrolled": False, "person": name, "n_photos": existing, "n_valid": 0}
 
-        # 2) Promediar embeddings de esta tanda + L2-normalize.
-        new_vec = self._l2_normalize(np.mean(np.stack(valid_vecs, axis=0), axis=0))
+        # 2) Una fila L2-normalizada por foto válida de esta tanda (sin promediar:
+        #    conservar cada muestra preserva la identidad mucho mejor).
+        new_rows = np.stack([self._l2_normalize(v) for v in valid_vecs], axis=0)
 
-        # 3) Fusionar con el embedding previo si corresponde.
-        embeddings = self._read_embeddings()
-        prev = embeddings.get(name)
-        if (not replace) and isinstance(prev, np.ndarray):
-            merged = self._l2_normalize((prev + new_vec) / 2.0)
+        # 3) Apilar con la galería previa de la persona (salvo replace).
+        gallery = self._read_embeddings()  # {name: matriz (n, 512)}
+        prev = gallery.get(name)
+        if (not replace) and isinstance(prev, np.ndarray) and prev.ndim == 2:
+            matrix = np.vstack([prev, new_rows])
         else:
-            merged = new_vec
+            matrix = new_rows
+        # Cota: conservar como mucho MAX_SAMPLES filas (las más recientes).
+        if matrix.shape[0] > self.MAX_SAMPLES:
+            matrix = matrix[-self.MAX_SAMPLES:]
 
-        # 4) Persistir vector + metadata.
-        embeddings[name] = merged
-        self._write_embeddings(embeddings)
+        # 4) Persistir matriz + metadata.
+        gallery[name] = matrix.astype(np.float32)
+        self._write_embeddings(gallery)
 
+        n_total = int(matrix.shape[0])
         index = self._read_index()
         now_iso = datetime.now(timezone.utc).isoformat()
-        if name in index and not replace:
-            index[name]["n_photos"] = index[name].get("n_photos", 0) + n_valid
-            index[name]["updated_at"] = now_iso
-        else:
-            index[name] = {
-                "n_photos": n_valid,
-                "enrolled_at": index.get(name, {}).get("enrolled_at", now_iso),
-                "updated_at": now_iso,
-            }
+        keep_enrolled_at = (name in index and not replace)
+        index[name] = {
+            "n_photos": n_total,
+            "enrolled_at": index.get(name, {}).get("enrolled_at", now_iso)
+            if keep_enrolled_at else now_iso,
+            "updated_at": now_iso,
+        }
         self._write_index(index)
 
         logger.info(
