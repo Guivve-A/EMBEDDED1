@@ -1,0 +1,52 @@
+# ===========================================================================
+# .gitignore raíz — EMBEBIDOS_1
+# Evita publicar secretos, datos biométricos, binarios y entornos locales.
+# ===========================================================================
+
+# --- Secretos / configuración local (NUNCA versionar) ---
+.env
+**/.env
+secrets/
+**/secrets/
+gui_config.json
+**/gui_config.json
+# (se conserva .env.example como plantilla)
+
+# --- Datos generados / biométricos en runtime ---
+**/storage/
+*.pkl
+*.h5
+*.bak
+*.bak-*
+fcm_tokens.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Entornos virtuales ---
+.venv/
+venv/
+env/
+
+# --- Android / Gradle ---
+App_kotlin_androidStudio/.gradle/
+App_kotlin_androidStudio/build/
+App_kotlin_androidStudio/app/build/
+App_kotlin_androidStudio/local.properties
+App_kotlin_androidStudio/.idea/
+*.apk
+*.aab
+
+# --- PlatformIO / firmware build ---
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# --- IDE / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
